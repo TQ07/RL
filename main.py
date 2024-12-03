@@ -274,6 +274,9 @@ class Game:
             policy_params -= self.lr * policy_gradient
             nn.utils.vector_to_parameters(policy_params, self.agent.policy_network.parameters()) # load params back into model
 
+            print(self.expected_return_lists[num_trajectories][t])
+            print(self.reward_lists[num_trajectories][t])
+
             value_loss = self.calc_value_loss(self.expected_return_lists[num_trajectories][t], self.reward_lists[num_trajectories][t])
             value_loss.backward(retain_graph=True)
 
