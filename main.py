@@ -38,8 +38,7 @@ class Policy(nn.Module):
         self.head = nn.Softmax()
 
     def forward(self, x):
-        x = torch.tensor(x)
-        x = x.to(torch.float32)
+        x = torch.as_tensor(x, dtype=torch.float32)
         logits = self.MLP(x)
         return self.head(logits)
 
@@ -58,8 +57,7 @@ class Value(nn.Module):
         )
 
     def forward(self, x):
-        x = torch.tensor(x)
-        x = x.to(torch.float32)
+        x = torch.as_tensor(x, dtype=torch.float32)
         logits = self.MLP(x)
         return logits
 
@@ -167,33 +165,42 @@ class Game:
     def __init__(self):
         self.env = Environment()
         self.agent = Agent()
-        self.trajectories = []
-        self.reward_lists = []
-        self.expected_return_lists = []
+        self.trajectory_history = []
+        self.reward_histroy = []
+        self.expected_return_history = []
         self.discount  = 1
         self.lr = 0.01
-        #self.optimizer_1 = torch.optim.SGD(self.agent.policy_network, lr=self.lr)
-        #self.optimizer_2 = torch.optim.SGD(self.agent.value_network.parameters(), lr=self.lr)
-        #self.rewards_to_go = 0
+        self.policy_optimizer = torch.optim.SGD(self.agent.policy_network.parameters(), lr=self.lr)
+        self.value_optimizer = torch.optim.SGD(self.agent.value_network.parameters(), lr=self.lr)
+        self.trajectory_count = 0
 
-    def calc_rewards_to_go(self, rewards, time):
-        rewards_to_go = 0
-        for t_prime in range(time, len(rewards)):
-            rewards_to_go += math.pow(self.discount, t_prime) * rewards[t_prime]
+    def calc_rewards_to_go(self, update_interval, reward_list): 
+        rewards_to_go_list = []
+        for t in range(update_interval):
+            rewards_to_go = 0
+            
+            for t_prime in range(t, len(reward_list)):
+                rewards_to_go += math.pow(self.discount, t_prime) * reward_list[t_prime]
+            rewards_to_go_list.append(rewards_to_go)
+
+        return rewards_to_go_list
+
+    def calc_adv(self, rewards_to_go, expected_return_list):
+        rewards_to_go = torch.as_tensor(rewards_to_go)
+        print(expected_return_list)
         
-        return rewards_to_go
-    
-    def calc_adv(self, rewards_to_go, expected_value):
-        return rewards_to_go-expected_value
+        return rewards_to_go-expected_return_list
     
     def calc_value_loss(self, expected_return, reward):
-        MSE = (expected_return - reward)**2
+
+        print(expected_return)
+        reward = torch.as_tensor(reward)
+        
+        MSE = torch.pow(expected_return - reward, 2)
         return MSE
        
     def game_loop(self, update_interval):
-        '''
-        one epoch 
-        '''
+    
         prev_state = self.env.state
         finish_reward = 0
 
@@ -219,7 +226,7 @@ class Game:
             self.env.update_map(prev_state, self.env.state)
             self.env.render()
 
-            # log the rewards  
+            # log the rewards
             if (self.env.state['pos'] == self.env.goal):
                 finish_reward = 10 
 
@@ -231,95 +238,55 @@ class Game:
             if (self.env.reached_goal):
                 break
 
-        return trajectory, reward_list, expected_return_list
+        return trajectory, reward_list, expected_return_list#, action_prob_list
 
-
-    def update_loop(self, num_trajectories):
+    def update(self, update_interval, trajectory, reward_list, expected_return_list):
         '''
-        runs t times after each epoch (when the game ends)
+        updates gradients per batch of update_interval size  
         '''
-        policy_gradient = 0
-        trajectory_gradient = 0
-        value_gradient = 0
-        t_interval = 0
-        num_trajectories -= 1
+        self.policy_optimizer.zero_grad()
+        self.value_optimizer.zero_grad()
 
-        for t in range(self.env.time):
+        self.trajectory_history.append(trajectory)
+        self.reward_histroy.append(reward_list)
+        self.expected_return_history.append(expected_return_list)
 
-            # trajectory_gradient = torch.autograd.grad(
-            #     outputs=self.trajectories[t][2], # outputs are the probs of each action
-            #     inputs=self.agent.policy_network.parameters(),  
-            #     create_graph=False    
-            # )
-            #self.optimizer_1.zero_grad()
-            #self.optimizer_2.zero_grad()
+        expected_return_list = torch.stack(expected_return_list)
+        advantage = self.calc_adv(self.calc_rewards_to_go(update_interval, reward_list), expected_return_list)
 
-            print(self.trajectories[num_trajectories][t])
+        # print(expected_return_list)
 
-            self.trajectories[num_trajectories][t][2].backward()
-            #trajectory_gradient = self.trajectories[num_trajectories][t][2].grad
+        #print(advantage)
+        action_probs = torch.stack([t[2] for t in trajectory])
+        #print(action_probs)
+        policy_loss_vector = advantage * action_probs
+        policy_loss_avg = torch.mean(policy_loss_vector)
+        policy_loss_avg.backward()
+        self.policy_optimizer.step()
 
-            policy_params = nn.utils.parameters_to_vector(self.agent.policy_network.parameters())
-            trajectory_gradient = nn.utils.parameters_to_vector(p.grad for p in self.agent.policy_network.parameters())
+        #print(policy_loss_avg)
 
-            print(trajectory_gradient.shape)
-
-             # compute the gradient using torch
-            advantage = self.calc_adv(self.calc_rewards_to_go(self.reward_lists[num_trajectories], t), self.agent.value(self.trajectories[num_trajectories][t][0]))
-            policy_gradient += trajectory_gradient * advantage # element wise multi?
-
-            print('adv shape: ', advantage.shape)
-            print('policy gradient shape:', policy_gradient.shape)
-
-            policy_params -= self.lr * policy_gradient
-            nn.utils.vector_to_parameters(policy_params, self.agent.policy_network.parameters()) # load params back into model
-
-            print(self.expected_return_lists[num_trajectories][t])
-            print(self.reward_lists[num_trajectories][t])
-
-            value_loss = self.calc_value_loss(self.expected_return_lists[num_trajectories][t], self.reward_lists[num_trajectories][t])
-            value_loss.backward(retain_graph=True)
+        value_loss_vector = self.calc_value_loss(expected_return_list, reward_list)
+        value_loss_avg = torch.mean(value_loss_vector)
 
 
-            self.optimizer_2.step()
+        print(value_loss_avg)
+        value_loss_avg.backward()
+        self.value_optimizer.step()
 
-            print('value loss:', value_loss)
+        #  print(value_loss_avg)
 
-        return policy_gradient, value_gradient
+    def play_n_games(self, update_interval, num_games):
 
-    def play_until_game_ends(self, update_interval):
-        policy_gradient_k = 0
-        value_gradient_k = 0
-        num_trajectories = 0
-        total_time = 0
+        for n in range(num_games):
+            print(f"\n\n{'=' * 50}\n|{'Running Game Number ' + str(n):^48}|\n{'=' * 50}")
+            while not self.env.reached_goal:
+                self.trajectory_count += 1
+                trajectory, reward_list, expected_return_list = self.game_loop(update_interval)
+                self.update(update_interval, trajectory, reward_list, expected_return_list)
 
-        while not self.env.reached_goal:
-            num_trajectories += 1
-            self.env.time = 0
+            self.game_summary()
 
-            trajectory, reward_list, expected_return_list = self.game_loop(update_interval=update_interval)
-            self.trajectories.append(trajectory)
-            self.reward_lists.append(reward_list)
-            self.expected_return_lists.append(expected_return_list)
-
-            policy_gradient, value_gradient, t_interval =  self.update_loop(num_trajectories)
-
-            policy_gradient_k += policy_gradient
-            value_gradient_k += value_gradient
-            policy_gradient_k /= num_trajectories
-            value_gradient_k /= (num_trajectories * self.env.time)
-
-            with torch.no_grad():  # Disable gradient tracking for manual updates
-                for param, grad in zip(self.agent.policy_network.parameters(), policy_gradient_k): # [issue] zip is too inefficient
-                    param -= self.lr * grad  # Gradient descent update
-            with torch.no_grad(): 
-                for param, grad in zip(self.agent.value_network.parameters(), value_gradient_k):
-                    param -= self.lr * grad  # Gradient descent update
-            
-            total_time += self.env.time
-
-        self.game_summary()
-
-    def game_summary(self):
-        print('\nGame Complete =============================================')
-        print(f'Total time steps {self.env.time}\nTotal rewards received{sum(self.reward_list)}\n')
+    def game_summary(self, update_interval, game_number):
+        print(f"\n{'+' * 50}\n|{f'Game Number {game_number} Complete (Yay!)' + str():^48}|\n{'+' * 50}")
+        print(f'Total time steps {self.env.time}\nTotal trajectories {self.trajectory_count}\nTotal rewards received{sum(self.reward_list)}\n')
