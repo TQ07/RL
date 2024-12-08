@@ -2,4 +2,4 @@ from main import *
 
 game = Game()
 
-game.play_until_game_ends(update_interval=5)
+game.play_n_games(update_interval=5, num_games=1)

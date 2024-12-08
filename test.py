@@ -58,7 +58,6 @@ grad = nn.utils.parameters_to_vector(p.grad for p in policy.parameters())
 
 print(grad)'''
 value = Value()
-input = (0,0,0)
+input = [(0,0,0),(0,0,0),(0,0,0)]
 output = value(input)
 print(output)
-
