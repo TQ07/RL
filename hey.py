@@ -1,15 +1,12 @@
 class ProblemSolver:
     def __init__(self):
         self.general_mindset = {1: "take a deep breath, don’t fight it", 2: "this is something fun; think about how cool the subject is", 3: "this nervousness is out of my control; it’s no big deal, nothing serious", 4: "be optimistic"} 
-        self.no_horny_mindset = ("it's nothing but a distraction", "it's nothing to struggle against")
         self.motivation_mindset = ("Be optimistic!", "Be happy!", "Be inspired!", "Be immersed by what you are doing!")
         self.break_options = ['read neuromancer', 'draw', 'talk to friends', 'arch linux' ,'hang out with friends']
     
     def solve(self, feeling):
         if feeling == "nervous":
             self.stop_nervousness()
-        elif feeling == "horny":
-            self.no_horny()
         elif feeling == "no motivation":
             self.get_more_motivation()
         elif feeling == "need a break":
@@ -17,8 +14,6 @@ class ProblemSolver:
         elif feeling == "good":
             print("Look at you! Yay!!!!!!!!!!!!!!!!!!!")
 
-    def no_horny(self):
-        print(self.no_horny_mindset)
 
     def get_more_motivation(self, subject):
         print('general motivation mindset: ', self.motivation_mindset)
@@ -43,7 +38,7 @@ class ProblemSolver:
 def simulate():
     print("<it's all right!> \n<be nice to yourself!>")
     while True:
-        print("\nHow are you feeling right now? Options: nervous, horny, no motivation, need a break?")
+        print("\nHow are you feeling right now? Options: nervous, no motivation, need a break?")
         feeling = input()
 
         solver = ProblemSolver()
