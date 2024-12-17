@@ -4,22 +4,13 @@ import torch
 import numpy as np
 
 '''
-RL steps:
-==========================================
-1. Agent observes the state of the environment (s).
-2. Agent takes action (a) based on its policy π on the state s.
-3. Agent interact with the environment. A new state is formed.
-4. Agent takes further actions based on the observed state.
-5. After a trajectory τ of motions, it adjusts its policy based on the total rewards R(τ) received.
+alt way to prevent agent from taking illegal movel: 
+valid_mask = torch.tensor([1, 0, 1, 1])  # 1 = valid, 0 = invalid
+masked_logits = logits + (1 - valid_mask) * -1e9  # Assign large negative value to invalid actions
 
-to do list:
-==========================================
-- better visualization of the game and agent's actions 
-- run mini-experiments to understand how to implement a policy and value network correctly
-- run-mini-simulations to test the reward function
-- figure out when to update gradients 
-- better gradient computation 
-
+# Sample action from masked probabilities
+action_probs = torch.softmax(masked_logits, dim=0)
+action = torch.multinomial(action_probs, num_samples=1)
 '''
 class Policy(nn.Module):
     '''
@@ -35,12 +26,12 @@ class Policy(nn.Module):
             nn.Linear(64, 4),
         )
 
-        self.head = nn.Softmax()
+        #self.head = nn.Softmax()
 
     def forward(self, x):
         x = torch.as_tensor(x, dtype=torch.float32)
         logits = self.MLP(x)
-        return self.head(logits)
+        return logits
 
 class Value(nn.Module):
     '''
@@ -134,19 +125,23 @@ class Environment:
         self.map[prev_state['pos'][0]][prev_state['pos'][1]] = 0 
         self.map[state['pos'][0]][state['pos'][1]] = 'A'
 
+    def mask_illegal_actions(self, logits, state):
+        possible_actions = [1,2,3,4]
 
-    def is_move_legal(self, action, state):
+        for i in range(len(logits)):
+            for j in range(len(possible_actions)):
+                if not self.is_action_legal(possible_actions[j], state):
+                    logits[i][j] -= torch.inf
 
-        #print(type(action))
+    def is_action_legal(self, action, state):
+        
         if state['pos'][0] == 0 and action == 1:
             return False
         elif state['pos'][0] == 9 and action == 3:
-            #print('What?????????????????????????????????')
             return False
         elif state['pos'][1] == 0 and action == 4:
             return False
         elif state['pos'][1] == 9 and action == 2:
-            #print('What?????????????????????????????????')
             return False
         else:
             return True 
@@ -176,14 +171,14 @@ class Environment:
         '''
         for i in range(len(self.map)):
             print(self.map[i], '\n')
-        print('\n')
+        #print('\n')
 
 class Game:
     def __init__(self):
         self.env = Environment()
         self.agent = Agent()
         self.trajectory_history = []
-        self.reward_histroy = []
+        self.reward_history = []
         self.expected_return_history = []
         self.discount  = 1
         self.lr = 0.01
@@ -211,7 +206,7 @@ class Game:
 
         return rewards_to_go-expected_return_list
     
-    def calc_value_loss(self, expected_return, reward):
+    def calc_value_loss(self, expected_return, reward): # use r to go instead
 
         #print(expected_return)
         reward = torch.as_tensor(reward)
@@ -228,42 +223,45 @@ class Game:
         expected_return_list = []
 
         for t in range(update_interval): 
-            penalty = -10
-            print(f'Running game... Time step {self.env.time}\nState = {self.env.state}')
+            #penalty = -2.5
+            print(f'\n\nRunning game... Time step {self.env.time}\nState = {self.env.state}')
 
-            if self.env.time == 10:
-                raise Exception('stopppppppppp')
+            #if self.env.time == 20:
+            #    raise Exception('stopppppppppp')
 
             # collect a set of trajectories D by running policy 
-            action, prob = self.agent.policy(prev_state)
+            action, logits = self.agent.policy(prev_state)
             action = action.item()
-            print('action:',action, ' prob:', prob)
+            print('action:',action, ', prob:', nn.functional.softmax(logits.detach()))
 
             expected_return = self.agent.value(prev_state)
             expected_return_list.append(expected_return)
 
-            print(prev_state)
+            print('expected_return:', expected_return)
 
             if self.env.is_move_legal(action, prev_state):
                 self.env.update_env(action) # updates the state 
-                penalty = 0
+                #penalty = 0
                 #print('updated state:', self.env.state)
             else:
                 print('Agent moving into wall! AHHHHHHHHHHHHHHHHHHHH')
+            
+            self.env.mask_illegal_actions(logits, prev_state)
               
-            trajectory.append((prev_state, action, prob))
+            trajectory.append((prev_state, action, logits))
 
             if (self.env.state['pos'] == self.env.goal):
                 finish_reward = 100
 
             reward = self.env.reward(prev_state, self.env.state)
             print('reward:', reward)
-            reward_list.append(reward + finish_reward + penalty)
+            reward_list.append(reward + finish_reward)
 
             self.env.update_map(prev_state, self.env.state)
             self.env.render()
 
             prev_state = self.env.state.copy()
+    
             self.env.time += 1
             if (self.env.reached_goal):
                 break
@@ -278,7 +276,7 @@ class Game:
         self.value_optimizer.zero_grad()
 
         self.trajectory_history.append(trajectory)
-        self.reward_histroy.append(reward_list)
+        self.reward_history.append(reward_list)
         self.expected_return_history.append(expected_return_list)
 
         # some reshaping
@@ -287,15 +285,18 @@ class Game:
 
         advantage = self.calc_adv(self.calc_rewards_to_go(update_interval, reward_list), expected_return_list)
 
+        print('advantage:', advantage)
+
         # print(expected_return_list)
 
         #print(advantage)
-        action_probs = torch.stack([t[2] for t in trajectory])
+        action_logits = torch.stack([t[2] for t in trajectory])
         #print(action_probs)
+        action_logits = torch.log_softmax(action_logits, dim=1)
 
         #print('advantage:', advantage)
 
-        policy_loss_vector = advantage * action_probs
+        policy_loss_vector = -(advantage * action_probs)
         policy_loss_avg = torch.mean(policy_loss_vector)
         policy_loss_avg.backward()
         self.policy_optimizer.step()
@@ -303,6 +304,9 @@ class Game:
         #print('policy loss shape:', policy_loss_vector.shape)
         print('policy loss avg:', policy_loss_avg)
 
+        print(expected_return_list)
+        print()
+        print(reward_list)
         value_loss_vector = self.calc_value_loss(expected_return_list, reward_list)
 
         #print('value loss shape:', value_loss_vector.shape)
@@ -316,17 +320,31 @@ class Game:
 
         #  print(value_loss_avg)
 
-    def play_n_games(self, update_interval, num_games):
+    def play_n_games(self, update_interval, trajectory_limit, num_games):
 
         for n in range(num_games):
             print(f"\n\n{'=' * 50}\n|{'Running Game Number ' + str(n):^48}|\n{'=' * 50}")
-            while not self.env.reached_goal:
+            #while not self.env.reached_goal:
+            for trajectory in range(trajectory_limit):
+                
                 self.trajectory_count += 1
                 trajectory, reward_list, expected_return_list = self.game_loop(update_interval)
                 self.update(update_interval, trajectory, reward_list, expected_return_list)
 
-            self.game_summary()
+                if self.env.reached_goal:
+                    #print('agent finished game!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                    raise Exception('agent finished game!!!!!!!!!!!!!!!!!!!!!')
+                    #break
+                    
+            
+            if not self.env.reached_goal:
+                self.env.x = 0
+                self.env.y = 0
+                self.env.state['pos'] = (self.env.x, self.env.y)
+                self.env.update_map(self.env.state, self.env.state)
 
-    def game_summary(self, update_interval, game_number):
+            self.game_summary(n)
+
+    def game_summary(self, game_number):
         print(f"\n{'+' * 50}\n|{f'Game Number {game_number} Complete (Yay!)' + str():^48}|\n{'+' * 50}")
-        print(f'Total time steps {self.env.time}\nTotal trajectories {self.trajectory_count}\nTotal rewards received{sum(self.reward_list)}\n')
+        print(f'Total time steps {self.env.time}\nTotal trajectories {self.trajectory_count}\nTotal rewards received: {sum(sum(i) for i in self.reward_history)}\n')
