@@ -8,5 +8,5 @@ sequence to clone repo
 ===============================
 git clone -b <branch_name> <repo link> <save location> 
 cd into that dir 
-log into git using the peronsal access token 
-put that as the password when prompted in the terminal 
+
+testing hey hey
