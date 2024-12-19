@@ -3,3 +3,7 @@ sequence to make changes
 git add . 
 git commit -m "your message here"
 git push origin <branch_name> 
+
+sequence to clone repo
+
+git clone -b <branch_name> <repo link> <save location> 
